@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# PyInstaller
+*.spec.bak
+
+# 打包产物（exe 体积大，不纳入版本控制）
+dist/NovelAIAgent.exe
+
+# 如果你想把 knowledge/ 也排除（只保留在 dist 中），取消下面这行的注释：
+# dist/knowledge/

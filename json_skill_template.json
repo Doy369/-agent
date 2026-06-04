@@ -1,0 +1,15 @@
+{
+  "name": "my_json_skill",
+  "description": "Example JSON Skill: returns custom data based on query.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {"type": "string", "description": "Search keyword or task description."}
+    },
+    "required": ["query"]
+  },
+  "run_type": "static_response",
+  "run_config": {
+    "response": "Example JSON Skill received query: {query}"
+  }
+}
