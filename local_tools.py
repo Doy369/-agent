@@ -15,7 +15,12 @@ def get_app_dir() -> Path:
     """返回可写的应用目录；打包为 exe 后使用 exe 所在目录。"""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    source_dir = Path(__file__).resolve().parent
+    # 开发模式下，如果 dist/ 目录存在，优先使用（与打包后的路径保持一致）
+    dist_dir = source_dir / "dist"
+    if dist_dir.is_dir():
+        return dist_dir
+    return source_dir
 
 
 def get_resource_path(name: str) -> Path:
@@ -48,6 +53,150 @@ _STOP_WORDS: set[str] = {
     "该", "则", "而", "且", "但", "只", "可", "能", "会", "应", "需",
     "请", "如", "按", "照", "根据", "关于", "通过", "经过", "为了",
     "出来", "起来", "过来", "过去", "下来", "下去", "进行", "使用",
+}
+
+
+# ---------------------------------------------------------------------------
+# Cross-lingual keyword mapping for Chinese → English knowledge base search
+# Each Chinese key maps to a list of English terms/phrases used in knowledge/*.md
+# ---------------------------------------------------------------------------
+_CROSSLINGUAL_MAP: dict[str, list[str]] = {
+    # ── 修炼 / 境界 / 功法 ──────────────────────────────────────────
+    "修炼": ["cultivation", "practice", "cultivator", "training", "advance"],
+    "境界": ["cultivation realm", "stage", "breakthrough tier", "level"],
+    "功法": ["technique", "method", "manual", "art", "path", "school"],
+    "灵力": ["qi", "spirit energy", "spiritual power", "energy source"],
+    "灵气": ["qi", "clear qi", "turbid qi", "spirit qi", "energy"],
+    "突破": ["breakthrough", "advancement", "ascend", "realm crossing"],
+    "瓶颈": ["bottleneck", "plateau", "wall", "block"],
+    "金丹": ["golden core", "golden pill"],
+    "元婴": ["nascent soul", "yuan ying", "origin spirit"],
+    "化神": ["transformation", "spirit transformation", "deity"],
+    "筑基": ["foundation building", "foundation establishment"],
+    "炼气": ["qi refinement", "breath cultivation"],
+    "渡劫": ["tribulation", "heavenly trial", "catastrophe"],
+    "大乘": ["great vehicle", "mahayana"],
+    "飞升": ["ascension", "ascend", "rise to upper realm"],
+    "体系": ["system", "framework", "structure", "scaffolding"],
+    "赋能": ["intake", "energy source", "power origin"],
+    "承载": ["bearing", "load", "capacity", "tolerance"],
+
+    # ── 世界 / 层次 / 空间 ──────────────────────────────────────────
+    "世界": ["world", "realm", "layer", "dimension", "sphere", "universe"],
+    "世界框架": ["world axes", "world structure", "cosmology", "pillars of world"],
+    "世界观": ["worldbuilding", "setting", "cosmology", "world logic"],
+    "层次": ["layer", "tier", "level", "stratification", "fold"],
+    "分层": ["layered", "stacked", "nested", "seven layers", "folded"],
+    "上界": ["upper realm", "immortal court", "celestial", "higher layer"],
+    "下界": ["lower realm", "mortal world", "bottom layer", "hongchenyuan"],
+    "中间层": ["middle layer", "intermediate realm", "between layers"],
+    "空间": ["space", "dimension", "realm boundary", "sphere"],
+    "维度": ["dimension", "fold", "plane"],
+    "壁垒": ["barrier", "wall", "seal", "blockade"],
+    "通道": ["route", "passage", "gate", "path", "travel route"],
+
+    # ── 势力 / 宗门 / 家族 ──────────────────────────────────────────
+    "势力": ["faction", "power", "force", "bloc", "camp"],
+    "宗门": ["sect", "clan", "school", "order", "house"],
+    "家族": ["clan", "family", "house", "great family", "lineage"],
+    "门派": ["sect", "school", "faction", "martial order"],
+    "朝廷": ["court", "dynasty", "imperial", "official power"],
+    "世家": ["great clan", "noble house", "aristocratic house", "great family"],
+    "六院": ["six houses", "six-house court", "six clans"],
+    "仙廷": ["immortal court", "hidden court", "celestial court", "upper court"],
+    "官方": ["official power", "court", "dynasty", "empire"],
+    "行会": ["guild", "trade", "alliance", "workshop"],
+    "祭祀": ["ritual", "folk power", "temple", "sacrifice"],
+
+    # ── 人物 / 关系 / 主角 ──────────────────────────────────────────
+    "人物": ["character", "cast", "person", "figure"],
+    "角色": ["character", "role", "cast member"],
+    "关系": ["relationship", "arc", "tension", "bond", "conflict"],
+    "主角": ["protagonist", "hero", "main character", "lead"],
+    "反派": ["antagonist", "villain", "enemy", "opponent", "rival"],
+    "配角": ["supporting character", "side character", "ensemble"],
+    "人物弧光": ["character arc", "arc", "transformation", "growth"],
+    "身份": ["identity", "status", "origin", "register"],
+    "来历": ["origin", "background", "birth", "lineage"],
+
+    # ── 金手指 / 机缘 / 主角优势 ────────────────────────────────────
+    "金手指": ["golden finger", "cheat", "hidden inheritance", "protagonist advantage"],
+    "机缘": ["opportunity", "fortune", "chance", "encounter", "inheritance"],
+    "奇遇": ["encounter", "fortune", "lucky chance", "discovery"],
+    "传承": ["inheritance", "legacy", "transmission", "heritage"],
+    "古宝": ["ancient artifact", "artifact", "relic", "treasure"],
+    "残魂": ["remnant soul", "residual spirit", "fragment soul"],
+    "系统": ["system", "interface", "mechanism"],
+    "骨片": ["bone shard", "bone fragment", "skull shard"],
+    "创始人": ["founder", "murdered founder", "ancestor", "originator"],
+
+    # ── 剧情 / 结构 / 节奏 ──────────────────────────────────────────
+    "分卷": ["volume", "arc", "book", "series structure"],
+    "结构": ["structure", "framework", "architecture", "scaffold"],
+    "大纲": ["outline", "structure", "plan", "blueprint"],
+    "节奏": ["pacing", "rhythm", "tempo", "progression"],
+    "高潮": ["climax", "peak", "revelation", "payoff"],
+    "反转": ["twist", "reversal", "turn", "subversion"],
+    "伏笔": ["foreshadowing", "setup", "clue", "hint", "payoff"],
+    "呼应": ["payoff", "callback", "resolution", "reclassify"],
+    "钩子": ["hook", "cliffhanger", "tension", "pull"],
+    "揭露": ["revelation", "reveal", "unveiling", "expose"],
+    "谜底": ["truth", "secret", "mystery", "hidden truth"],
+    "线索": ["clue", "hint", "trail", "thread", "fragment"],
+
+    # ── 命名 / 称号 / 语言 ──────────────────────────────────────────
+    "命名": ["naming", "name", "title", "term", "register"],
+    "称号": ["title", "epithet", "honorific", "rank name"],
+    "语言": ["language", "register", "naming system", "terminology"],
+    "标签": ["label", "tag", "category", "classifier"],
+
+    # ── 场景 / 氛围 / 感官 ──────────────────────────────────────────
+    "场景": ["scene", "location", "setting", "place", "realm description"],
+    "氛围": ["atmosphere", "flavor", "ambiance", "mood", "texture"],
+    "感官": ["sensory", "smell", "sound", "color", "texture", "light"],
+    "描写": ["description", "depiction", "rendering", "language"],
+    "环境": ["environment", "surroundings", "ecology", "terrain"],
+
+    # ── 万兽 / 妖族 / 兽域 ──────────────────────────────────────────
+    "妖兽": ["beast", "monster", "creature", "spirit beast"],
+    "兽域": ["beast realm", "beast cavern", "wild realm"],
+    "血脉": ["bloodline", "ancestry", "lineage", "blood", "inheritance"],
+    "妖族": ["beast", "creature", "non-human", "monster civilization"],
+    "万兽": ["ten thousand beast", "beast cavern", "beast realm"],
+
+    # ── 冥界 / 鬼域 / 死亡 ──────────────────────────────────────────
+    "冥界": ["underworld", "ghost realm", "blood realm", "afterlife"],
+    "鬼域": ["ghost realm", "underworld", "spirit world", "dead realm"],
+    "灵魂": ["soul", "spirit", "ghost", "memory", "remnant"],
+    "死亡": ["death", "dead", "underworld", "grave", "corpse"],
+    "轮回": ["reincarnation", "cycle", "rebirth", "return"],
+    "转世": ["reincarnation", "rebirth", "new life"],
+    "记忆": ["memory", "recollection", "remembrance", "trace"],
+
+    # ── 外来者 / 侵蚀 / 外域 ──────────────────────────────────────
+    "外来者": ["outsider", "invader", "foreign", "cosmic outsider"],
+    "侵蚀": ["corruption", "erosion", "decay", "rot", "contamination"],
+    "外域": ["outside realm", "outer domain", "beyond", "void"],
+    "入侵": ["invasion", "incursion", "intrusion", "breach"],
+    "污染": ["corruption", "contamination", "taint", "blight"],
+
+    # ── 实例 / 案例 ────────────────────────────────────────────────
+    "实例": ["worked example", "example", "case", "demonstration"],
+    "案例": ["worked example", "example", "case study", "template"],
+    "红尘院": ["hongchenyuan", "red dust courtyard"],
+    "七重": ["sevenfold", "seven layers", "seven fold"],
+    "星图": ["star atlas", "star chart", "fracture star"],
+    "碎骨": ["bone shard", "bone fragment"],
+
+    # ── 通用 / 杂项 ────────────────────────────────────────────────
+    "设定": ["setting", "worldbuilding", "configuration", "definition"],
+    "规则": ["rule", "law", "principle", "axiom", "logic"],
+    "设计": ["design", "build", "construct", "architect"],
+    "一致性": ["consistency", "coherence", "contradiction", "checklist"],
+    "矛盾": ["contradiction", "conflict", "tension", "inconsistency"],
+    "代价": ["cost", "price", "burden", "sacrifice", "consequence"],
+    "压迫": ["exploitation", "oppression", "extraction", "burden"],
+    "秩序": ["order", "orthodoxy", "legitimacy", "system"],
 }
 
 
@@ -145,7 +294,12 @@ def _split_sections(text: str) -> list[str]:
 
 
 def _query_terms(query: str) -> list[str]:
-    """Extract meaningful Chinese/English search terms using jieba segmentation."""
+    """Extract meaningful Chinese/English search terms using jieba segmentation.
+
+    After jieba tokenization, Chinese terms are expanded via _CROSSLINGUAL_MAP
+    to include their English equivalents, enabling cross-language retrieval from
+    English-language knowledge base documents.
+    """
     query = query.strip()
     if not query:
         return []
@@ -165,18 +319,37 @@ def _query_terms(query: str) -> list[str]:
             # Single Chinese char that survived stop-word filter (e.g., rare chars in names)
             terms.append(word)
 
+    # Expand Chinese terms with their English equivalents from the cross-lingual map.
+    # Also try combining adjacent Chinese terms as a compound key for multi-word mappings.
+    chinese_only = [t for t in terms if any("一" <= ch <= "鿿" for ch in t)]
+    for term in chinese_only:
+        if term in _CROSSLINGUAL_MAP:
+            terms.extend(_CROSSLINGUAL_MAP[term])
+
+    # Also try compound keys: e.g. jieba splits "世界框架" → "世界" + "框架";
+    # try the original compound from the raw query to catch "世界框架" as a whole.
+    for compound_key, english_terms in _CROSSLINGUAL_MAP.items():
+        if len(compound_key) >= 3 and compound_key in query:
+            terms.extend(english_terms)
+
     # Deduplicate while preserving order (case-insensitive)
     seen: set[str] = set()
     result: list[str] = []
     for term in terms:
-        if term.lower() not in seen:
-            seen.add(term.lower())
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
             result.append(term)
     return result
 
 
 def _tokenize_for_tfidf(text: str) -> dict[str, float]:
-    """Tokenize text and return term frequency dict (raw counts)."""
+    """Tokenize text and return term frequency dict (raw counts).
+
+    After standard jieba segmentation, also scans the text for multi-word English
+    phrases from _CROSSLINGUAL_MAP so that queries expanded with compound terms
+    (e.g. "golden finger") can match document contents directly.
+    """
     words = jieba.cut_for_search(text)
     tf: dict[str, float] = {}
     for word in words:
@@ -186,6 +359,18 @@ def _tokenize_for_tfidf(text: str) -> dict[str, float]:
         if len(word) < 2 and not word.isascii():
             continue
         tf[word] = tf.get(word, 0.0) + 1.0
+
+    # Preserve multi-word English phrases so cross-lingual compound queries
+    # (e.g. "golden finger", "world axes", "bone shard") match the document
+    text_lower = text.lower()
+    for english_terms in _CROSSLINGUAL_MAP.values():
+        for phrase in english_terms:
+            if " " not in phrase:
+                continue  # single-word terms already handled by jieba
+            count = text_lower.count(phrase)
+            if count > 0:
+                tf[phrase] = tf.get(phrase, 0.0) + float(count)
+
     return tf
 
 
@@ -204,12 +389,64 @@ def _cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> floa
 
 
 def search_local_knowledge(query: str) -> str:
-    """本地设定集语义检索：使用 jieba 分词 + TF-IDF 余弦相似度进行搜索。"""
+    """本地设定集语义检索：优先使用 Embedding 语义搜索，降级到 TF-IDF。
+
+    === 搜索策略 ===
+
+    第一方案（首选）—— Embedding 语义搜索：
+      - 使用 BGE-small-zh-v1.5 模型把查询文本转成向量
+      - 在 ChromaDB 向量库中搜索最相似的文档块
+      - 优势：理解语义，支持中英跨语言检索
+      - 依赖：sentence-transformers 库
+
+    第二方案（降级）—— TF-IDF 关键词搜索：
+      - 使用 jieba 分词 + TF-IDF 余弦相似度
+      - 优势：无额外依赖，始终可用
+      - 局限：只能匹配同一种语言的关键词
+
+    选择逻辑：
+      - 如果知识库中有向量索引数据 → 直接用语义搜索
+      - 如果 sentence-transformers 没装 → 自动降级到 TF-IDF
+      - 如果语义搜索出错 → 自动降级到 TF-IDF（但会提示错误原因）
+    """
     ensure_app_dirs()
     query = query.strip()
     if not query:
         return "请先输入要检索的关键词，例如：境界划分、主角能力、唐朝夜市。"
 
+    # ---- 尝试语义搜索 ----
+    # 用 try/except 保护：就算新代码出了问题，也不影响现有功能
+    try:
+        from knowledge_base import EmbeddingKnowledgeBase, get_knowledge_base
+
+        kb = get_knowledge_base()
+
+        # check_and_refresh: 如果知识文件有变动，自动重建索引
+        # 这样修改 knowledge.txt 后不需要手动点"重建索引"按钮
+        chunk_count = kb.check_and_refresh()
+
+        if chunk_count > 0:
+            # 语义搜索可用的标志
+            return kb.search(query, top_k=5)
+
+    except ImportError:
+        # sentence-transformers 没装 → 静默降级
+        pass
+    except Exception as exc:
+        # 其他错误 → 在结果中提示，然后降级
+        fallback_header = (
+            f"[注意] 语义搜索遇到问题，已降级到关键词搜索。\n"
+            f"原因：{exc}\n"
+            f'可尝试：重新导入知识库文件，或在设置中点击“重建索引”。\n\n'
+        )
+        return fallback_header + _search_local_knowledge_tfidf(query)
+
+    # ---- 降级：使用原来的 TF-IDF 搜索 ----
+    return _search_local_knowledge_tfidf(query)
+
+
+def _search_local_knowledge_tfidf(query: str) -> str:
+    """原始的 TF-IDF 关键词搜索（作为降级方案保留）。"""
     query_terms = _query_terms(query)
     if not query_terms:
         return f"无法从查询中提取有效搜索词：{query}"

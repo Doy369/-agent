@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import re
 import shutil
 import sys
 import traceback
@@ -44,10 +45,10 @@ class LocalSkill:
 
 
 def import_skill_files(paths: list[str]) -> list[Path]:
-    """Copy user-selected .py or .json skill files into local_skills/."""
+    """Copy user-selected .py, .json, or .md skill files into local_skills/."""
     ensure_app_dirs()
     imported: list[Path] = []
-    allowed_suffixes = {".py", ".json"}
+    allowed_suffixes = {".py", ".json", ".md"}
 
     for raw_path in paths:
         source = Path(raw_path)
@@ -76,12 +77,16 @@ def load_local_skills() -> tuple[dict[str, LocalSkill], list[str]]:
     skills: dict[str, LocalSkill] = {}
     errors: list[str] = []
 
-    for path in sorted(list(SKILL_DIR.glob("*.py")) + list(SKILL_DIR.glob("*.json"))):
+    for path in sorted(
+        list(SKILL_DIR.glob("*.py")) + list(SKILL_DIR.glob("*.json")) + list(SKILL_DIR.glob("*.md"))
+    ):
         if path.name.startswith("_"):
             continue
         try:
             if path.suffix.lower() == ".json":
                 skill = _load_json_skill(path)
+            elif path.suffix.lower() == ".md":
+                skill = _load_md_skill(path)
             else:
                 skill = _load_one_skill(path)
             if skill.name in skills:
@@ -133,6 +138,56 @@ def _load_one_skill(path: Path) -> LocalSkill:
         parameters=parameters,
         file_path=path,
         run=run,
+    )
+
+
+def _load_md_skill(path: Path) -> LocalSkill:
+    """Parse a .md skill file with YAML frontmatter (name, description).
+
+    The markdown body below the frontmatter becomes a static_response skill:
+    when invoked by the model, the full markdown text is returned as context.
+    """
+    raw = path.read_text(encoding="utf-8")
+    # Parse YAML frontmatter between --- delimiters
+    frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", raw, re.DOTALL)
+    if not frontmatter_match:
+        raise ValueError("Missing YAML frontmatter delimited by --- lines")
+
+    body = raw[frontmatter_match.end():].strip()
+    frontmatter_text = frontmatter_match.group(1)
+
+    # Lightweight YAML-like parsing: key: value per line (single-line values only)
+    metadata: dict[str, str] = {}
+    for line in frontmatter_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^(\w[\w-]*)\s*:\s*(.+)$", line)
+        if m:
+            metadata[m.group(1)] = m.group(2).strip()
+
+    name = metadata.get("name", "").strip()
+    if not name:
+        raise ValueError("Missing required frontmatter field: name")
+    # Allow hyphens in frontmatter names by converting to underscores
+    name = name.replace("-", "_")
+    if not name.isidentifier():
+        raise ValueError(f"name must be a valid Function Calling name: {name}")
+
+    description = metadata.get("description", f"Markdown Skill: {name}").strip()
+
+    def _run(**kwargs: Any) -> str:
+        return body
+
+    return LocalSkill(
+        name=name,
+        description=description,
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        file_path=path,
+        run=_run,
     )
 
 

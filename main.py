@@ -47,6 +47,7 @@ from local_tools import (
     safe_filename,
     search_local_knowledge,
 )
+from knowledge_base import get_knowledge_base, rebuild_knowledge_base
 from skill_loader import import_skill_files
 from workers import GenerationWorker
 
@@ -180,12 +181,14 @@ class NovelAIAgentWindow(QMainWindow):
         self.import_skill_btn = QPushButton("导入 Skill")
         self.refresh_skill_btn = QPushButton("刷新 Skill")
         self.local_search_btn = QPushButton("检索本地设定")
+        self.rebuild_index_btn = QPushButton("重建语义索引")
         self.local_audit_btn = QPushButton("本地错字检查")
         self.local_stats_btn = QPushButton("生成全书统计")
         toolbox_layout.addWidget(self.import_knowledge_btn)
         toolbox_layout.addWidget(self.import_skill_btn)
         toolbox_layout.addWidget(self.refresh_skill_btn)
         toolbox_layout.addWidget(self.local_search_btn)
+        toolbox_layout.addWidget(self.rebuild_index_btn)
         toolbox_layout.addWidget(self.local_audit_btn)
         toolbox_layout.addWidget(self.local_stats_btn)
 
@@ -276,6 +279,7 @@ class NovelAIAgentWindow(QMainWindow):
         self.import_skill_btn.clicked.connect(self.import_skill_from_dialog)
         self.refresh_skill_btn.clicked.connect(lambda: self.refresh_local_skills(show_dialog=True))
         self.local_search_btn.clicked.connect(self.run_local_knowledge_search)
+        self.rebuild_index_btn.clicked.connect(self.rebuild_knowledge_index)
         self.local_audit_btn.clicked.connect(self.run_local_text_audit)
         self.local_stats_btn.clicked.connect(self.run_local_stats)
 
@@ -532,6 +536,7 @@ class NovelAIAgentWindow(QMainWindow):
             self.import_skill_btn,
             self.refresh_skill_btn,
             self.local_search_btn,
+            self.rebuild_index_btn,
             self.local_audit_btn,
             self.local_stats_btn,
         ]:
@@ -629,13 +634,20 @@ class NovelAIAgentWindow(QMainWindow):
         lines.extend(["", "这些文件已进入本地知识库，后续可通过【检索本地设定】或 search_local_knowledge 工具读取。"])
         message = "\n".join(lines)
         self.append_skill_log(f"已导入 {len(imported)} 个知识库文件到：{KNOWLEDGE_DIR}")
+        # 导入后自动重建语义索引
+        self.append_skill_log("正在重建语义索引...")
+        try:
+            count = rebuild_knowledge_base()
+            self.append_skill_log(f"语义索引已更新（{count} 个文本块）。")
+        except Exception as exc:
+            self.append_skill_log(f"语义索引更新失败：{exc}（下次检索时会自动重试）")
         self.show_text_dialog("导入知识库完成", message)
 
     def import_skill_from_dialog(self) -> None:
         reply = QMessageBox.warning(
             self,
             "导入 Skill 安全提示",
-            "Python Skill 会在本机执行，请只导入你信任的 .py 文件。JSON Skill 可安全导入。请只导入你信任的文件。",
+            "Python Skill 会在本机执行，请只导入你信任的 .py 文件。JSON Skill 和 Markdown Skill 可安全导入。请只导入你信任的文件。",
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Ok:
@@ -645,7 +657,7 @@ class NovelAIAgentWindow(QMainWindow):
             self,
             "导入 Skill 文件",
             str(SKILL_DIR),
-            "Skill 文件 (*.py *.json);;Python Skill (*.py);;JSON Skill (*.json);;所有文件 (*)",
+            "Skill 文件 (*.py *.json *.md);;Python Skill (*.py);;JSON Skill (*.json);;Markdown Skill (*.md);;所有文件 (*)",
         )
         if not paths:
             return
@@ -700,6 +712,26 @@ class NovelAIAgentWindow(QMainWindow):
         self.append_skill_log("手动触发【本地归档统计】。")
         result = local_archive_and_stats()
         self.show_text_dialog("全书统计", result)
+
+    def rebuild_knowledge_index(self) -> None:
+        """手动重建语义索引。"""
+        self.append_skill_log("手动触发【重建语义索引】...")
+        try:
+            count = rebuild_knowledge_base()
+            kb = get_knowledge_base()
+            stats = kb.get_stats()
+            msg = (
+                f"语义索引重建完成！\n\n"
+                f"文本块数: {count}\n"
+                f"存储位置: {stats['persist_dir']}\n"
+                f"模型: {stats['model']}\n\n"
+                f"现在搜索「检索本地设定」将使用语义搜索。"
+            )
+            self.append_skill_log(f"索引重建完成：{count} 个块")
+            self.show_text_dialog("重建语义索引", msg)
+        except Exception as exc:
+            self.append_skill_log(f"索引重建失败：{exc}")
+            QMessageBox.warning(self, "重建失败", str(exc))
 
     def show_text_dialog(self, title: str, text: str) -> None:
         dialog = QDialog(self)

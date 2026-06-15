@@ -72,7 +72,7 @@ OPENAI_TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_local_knowledge",
-            "description": "本地设定集检索。读取 knowledge.txt 与 knowledge/*.txt，查找世界观、境界、人物能力等设定。",
+            "description": "本地设定集检索。读取 knowledge.txt 与 knowledge/*.txt|*.md 中的中英文知识文件，支持跨语言语义搜索。查找世界观、境界、人物能力等设定。",
             "parameters": {
                 "type": "object",
                 "properties": {
