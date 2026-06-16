@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+build
+dist
+generated_images
+history
+vector_db
+*.spec.bak

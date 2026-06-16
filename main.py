@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import importlib.util
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,12 +32,16 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from agent import AgentConfig, NovelAgent
+from finetune_exporter import DEFAULT_OUTPUT_FILE, export_openai_chat_jsonl
+from langchain_integration import describe_langchain_integration
+from langgraph_workflow import run_review_graph
 from local_tools import (
     KNOWLEDGE_DIR,
     SKILL_DIR,
@@ -48,7 +54,8 @@ from local_tools import (
     search_local_knowledge,
 )
 from knowledge_base import get_knowledge_base, rebuild_knowledge_base
-from skill_loader import import_skill_files
+from prompt_templates import chapter_prompt, outline_prompt, polish_prompt
+from skill_loader import import_skill_files, run_local_skill
 from workers import GenerationWorker
 
 
@@ -74,6 +81,7 @@ class NovelAIAgentWindow(QMainWindow):
         self.resize(1480, 920)
         self._build_ui()
         self._connect_signals()
+        self._refresh_workspace_status()
         self.statusBar().showMessage("就绪")
         self.append_skill_log("本地工具箱已就绪。")
         self.append_skill_log(self.agent.get_local_skill_summary())
@@ -93,7 +101,7 @@ class NovelAIAgentWindow(QMainWindow):
         splitter.addWidget(self._build_left_panel())
         splitter.addWidget(self._build_center_panel())
         splitter.addWidget(self._build_right_panel())
-        splitter.setSizes([330, 820, 360])
+        splitter.setSizes([360, 840, 320])
         root_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(root)
@@ -146,6 +154,20 @@ class NovelAIAgentWindow(QMainWindow):
         panel.setObjectName("SidePanel")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("LeftTabs")
+        tabs.addTab(self._build_creation_tab(), "创作")
+        tabs.addTab(self._build_assets_tab(), "资料")
+        tabs.addTab(self._build_architecture_tab(), "增强")
+        layout.addWidget(tabs, 1)
+        return panel
+
+    def _build_creation_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
 
         setting_group = QGroupBox("小说设定")
@@ -154,7 +176,7 @@ class NovelAIAgentWindow(QMainWindow):
         self.setting_edit = QTextEdit()
         self.setting_edit.setAcceptRichText(False)
         self.setting_edit.setPlaceholderText("输入小说大纲、背景设定、主角人设；也可写：查看我的设定、检查一下错字。")
-        self.setting_edit.setMinimumHeight(280)
+        self.setting_edit.setMinimumHeight(360)
 
         form_row = QHBoxLayout()
         self.style_combo = QComboBox()
@@ -175,11 +197,22 @@ class NovelAIAgentWindow(QMainWindow):
         setting_layout.addWidget(self.word_slider)
         setting_layout.addWidget(self.word_label)
 
+        layout.addWidget(setting_group, 1)
+        layout.addStretch(1)
+        return tab
+
+    def _build_assets_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(12)
+
         toolbox_group = QGroupBox("本地工具箱")
         toolbox_layout = QVBoxLayout(toolbox_group)
         self.import_knowledge_btn = QPushButton("导入知识库")
         self.import_skill_btn = QPushButton("导入 Skill")
         self.refresh_skill_btn = QPushButton("刷新 Skill")
+        self.run_skill_btn = QPushButton("运行本地 Skill")
         self.local_search_btn = QPushButton("检索本地设定")
         self.rebuild_index_btn = QPushButton("重建语义索引")
         self.local_audit_btn = QPushButton("本地错字检查")
@@ -187,20 +220,61 @@ class NovelAIAgentWindow(QMainWindow):
         toolbox_layout.addWidget(self.import_knowledge_btn)
         toolbox_layout.addWidget(self.import_skill_btn)
         toolbox_layout.addWidget(self.refresh_skill_btn)
+        toolbox_layout.addWidget(self.run_skill_btn)
         toolbox_layout.addWidget(self.local_search_btn)
         toolbox_layout.addWidget(self.rebuild_index_btn)
         toolbox_layout.addWidget(self.local_audit_btn)
         toolbox_layout.addWidget(self.local_stats_btn)
 
-        layout.addWidget(setting_group, 1)
         layout.addWidget(toolbox_group)
-        return panel
+        layout.addStretch(1)
+        return tab
+
+    def _build_architecture_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(12)
+
+        architecture_group = QGroupBox("架构增强")
+        architecture_layout = QVBoxLayout(architecture_group)
+        self.arch_status_btn = QPushButton("查看能力状态")
+        self.prompt_preview_btn = QPushButton("预览 Prompt 模板")
+        self.langchain_status_btn = QPushButton("LangChain 适配状态")
+        self.langgraph_review_btn = QPushButton("运行 LangGraph 审稿")
+        self.finetune_export_btn = QPushButton("导出微调数据")
+        self.api_docker_btn = QPushButton("API / Docker 启动说明")
+        architecture_layout.addWidget(self.arch_status_btn)
+        architecture_layout.addWidget(self.prompt_preview_btn)
+        architecture_layout.addWidget(self.langchain_status_btn)
+        architecture_layout.addWidget(self.langgraph_review_btn)
+        architecture_layout.addWidget(self.finetune_export_btn)
+        architecture_layout.addWidget(self.api_docker_btn)
+
+        layout.addWidget(architecture_group)
+        layout.addStretch(1)
+        return tab
 
     def _build_center_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+
+        status_bar = QFrame()
+        status_bar.setObjectName("WorkspaceStatusBar")
+        status_layout = QHBoxLayout(status_bar)
+        status_layout.setContentsMargins(10, 8, 10, 8)
+        status_layout.setSpacing(8)
+        self.outline_state_label = self._build_status_chip("大纲：未生成")
+        self.chapter_state_label = self._build_status_chip("章节：0")
+        self.body_count_label = self._build_status_chip("正文：0 字")
+        self.selection_count_label = self._build_status_chip("选中：0 字")
+        status_layout.addWidget(self.outline_state_label)
+        status_layout.addWidget(self.chapter_state_label)
+        status_layout.addWidget(self.body_count_label)
+        status_layout.addWidget(self.selection_count_label)
+        status_layout.addStretch(1)
 
         controls = QFrame()
         controls.setObjectName("ControlBar")
@@ -230,9 +304,16 @@ class NovelAIAgentWindow(QMainWindow):
         self.editor.setPlaceholderText("生成的大纲和章节会显示在这里，也可以直接手动修改。")
         self.editor.setFont(QFont("Microsoft YaHei UI", 11))
 
+        layout.addWidget(status_bar)
         layout.addWidget(controls)
         layout.addWidget(self.editor, 1)
         return panel
+
+    def _build_status_chip(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("StatusChip")
+        label.setMinimumHeight(30)
+        return label
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -245,27 +326,35 @@ class NovelAIAgentWindow(QMainWindow):
         self.save_btn = QPushButton("保存当前章")
         action_layout.addWidget(self.save_btn)
 
-        history_group = QGroupBox("历史章节")
-        history_layout = QVBoxLayout(history_group)
-        self.history_list = QListWidget()
-        self.history_list.setMinimumHeight(240)
-        history_layout.addWidget(self.history_list)
+        right_tabs = QTabWidget()
+        right_tabs.setObjectName("RightTabs")
 
-        console_group = QGroupBox("技能日志 / 控制台")
-        console_layout = QVBoxLayout(console_group)
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+        history_layout.setContentsMargins(0, 10, 0, 0)
+        self.history_list = QListWidget()
+        history_layout.addWidget(self.history_list, 1)
+
+        log_tab = QWidget()
+        console_layout = QVBoxLayout(log_tab)
+        console_layout.setContentsMargins(0, 10, 0, 0)
         self.skill_console = QTextEdit()
         self.skill_console.setReadOnly(True)
-        self.skill_console.setMinimumHeight(240)
-        console_layout.addWidget(self.skill_console)
+        console_layout.addWidget(self.skill_console, 1)
+
+        right_tabs.addTab(history_tab, "历史")
+        right_tabs.addTab(log_tab, "日志")
 
         layout.addWidget(action_group)
-        layout.addWidget(history_group, 1)
-        layout.addWidget(console_group, 1)
+        layout.addWidget(right_tabs, 1)
         return panel
 
     def _connect_signals(self) -> None:
         self.word_slider.valueChanged.connect(lambda value: self.word_label.setText(f"{value} 字"))
+        self.word_slider.valueChanged.connect(lambda _value: self._refresh_workspace_status())
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self.editor.textChanged.connect(self._refresh_workspace_status)
+        self.editor.selectionChanged.connect(self._refresh_workspace_status)
 
         self.outline_btn.clicked.connect(self.generate_outline)
         self.chapter_btn.clicked.connect(self.generate_next_chapter)
@@ -278,10 +367,17 @@ class NovelAIAgentWindow(QMainWindow):
         self.import_knowledge_btn.clicked.connect(self.import_knowledge_from_dialog)
         self.import_skill_btn.clicked.connect(self.import_skill_from_dialog)
         self.refresh_skill_btn.clicked.connect(lambda: self.refresh_local_skills(show_dialog=True))
+        self.run_skill_btn.clicked.connect(self.run_selected_local_skill)
         self.local_search_btn.clicked.connect(self.run_local_knowledge_search)
         self.rebuild_index_btn.clicked.connect(self.rebuild_knowledge_index)
         self.local_audit_btn.clicked.connect(self.run_local_text_audit)
         self.local_stats_btn.clicked.connect(self.run_local_stats)
+        self.arch_status_btn.clicked.connect(self.show_architecture_status)
+        self.prompt_preview_btn.clicked.connect(self.preview_prompt_templates)
+        self.langchain_status_btn.clicked.connect(self.show_langchain_status)
+        self.langgraph_review_btn.clicked.connect(self.run_langgraph_review)
+        self.finetune_export_btn.clicked.connect(self.export_finetune_dataset_from_dialog)
+        self.api_docker_btn.clicked.connect(self.show_api_docker_guide)
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
@@ -352,6 +448,42 @@ class NovelAIAgentWindow(QMainWindow):
                 background: #ffffff;
                 border: 1px solid #d8dee9;
                 border-radius: 8px;
+            }
+            QFrame#WorkspaceStatusBar {
+                background: #ffffff;
+                border: 1px solid #d8dee9;
+                border-radius: 8px;
+            }
+            QLabel#StatusChip {
+                background: #f1f5f9;
+                border: 1px solid #d8dee9;
+                border-radius: 6px;
+                padding: 5px 9px;
+                color: #334155;
+                font-weight: 600;
+            }
+            QTabWidget::pane {
+                border: 0;
+                background: transparent;
+            }
+            QTabBar::tab {
+                background: #e2e8f0;
+                color: #334155;
+                border: 1px solid #cbd5e1;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 8px 14px;
+                margin-right: 4px;
+                font-weight: 600;
+            }
+            QTabBar::tab:selected {
+                background: #ffffff;
+                color: #1d4ed8;
+                border-color: #93c5fd;
+            }
+            QTabBar::tab:hover {
+                background: #dbeafe;
             }
             QSlider::groove:horizontal {
                 height: 6px;
@@ -535,13 +667,36 @@ class NovelAIAgentWindow(QMainWindow):
             self.import_knowledge_btn,
             self.import_skill_btn,
             self.refresh_skill_btn,
+            self.run_skill_btn,
             self.local_search_btn,
             self.rebuild_index_btn,
             self.local_audit_btn,
             self.local_stats_btn,
+            self.arch_status_btn,
+            self.prompt_preview_btn,
+            self.langchain_status_btn,
+            self.langgraph_review_btn,
+            self.finetune_export_btn,
+            self.api_docker_btn,
         ]:
             button.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
+
+    def _refresh_workspace_status(self) -> None:
+        if not hasattr(self, "outline_state_label"):
+            return
+
+        text = self.editor.toPlainText()
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
+        self.outline_state_label.setText("大纲：已生成" if self.current_outline.strip() else "大纲：未生成")
+        self.chapter_state_label.setText(f"章节：{len(self.chapters)}")
+        self.body_count_label.setText(f"正文：约 {self._count_text_units(text)} / {self.word_slider.value()} 字")
+        self.selection_count_label.setText(f"选中：约 {self._count_text_units(selected_text)} 字")
+
+    def _count_text_units(self, text: str) -> int:
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text or ""))
+        latin_words = len(re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?", text or ""))
+        return cjk_count + latin_words
 
     def save_current_chapter(self) -> None:
         content = self.editor.toPlainText().strip()
@@ -583,6 +738,7 @@ class NovelAIAgentWindow(QMainWindow):
         self.history_list.addItem(item)
         self.history_list.setCurrentItem(item)
         self.current_history_entry_index = len(self.history_entries) - 1
+        self._refresh_workspace_status()
 
     def load_history_item(self, item: QListWidgetItem) -> None:
         self.sync_current_editor_to_history()
@@ -595,6 +751,7 @@ class NovelAIAgentWindow(QMainWindow):
         if entry.get("kind") == "outline":
             self.current_outline = entry.get("content", "")
         self.statusBar().showMessage(f"已切换：{entry.get('title', '未命名')}")
+        self._refresh_workspace_status()
 
     def sync_current_editor_to_history(self) -> None:
         """把用户在富文本编辑区的手动修改同步回 Agent 记忆。"""
@@ -613,6 +770,7 @@ class NovelAIAgentWindow(QMainWindow):
             chapter_index = entry.get("chapter_index")
             if isinstance(chapter_index, int) and 0 <= chapter_index < len(self.chapters):
                 self.chapters[chapter_index]["content"] = content
+        self._refresh_workspace_status()
 
     def import_knowledge_from_dialog(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -692,6 +850,77 @@ class NovelAIAgentWindow(QMainWindow):
         if show_dialog:
             self.show_text_dialog("本地 Skill 状态", "\n".join(lines))
 
+    def run_selected_local_skill(self) -> None:
+        errors = self.agent.reload_local_skills()
+        for error in errors:
+            self.append_skill_log(f"Skill 加载警告：{error}")
+
+        skills = list(self.agent.local_skills.values())
+        if not skills:
+            QMessageBox.information(self, "没有可运行的 Skill", "当前未加载本地 Skill。")
+            return
+
+        labels = [f"{skill.name} - {skill.description[:48]}" for skill in skills]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "运行本地 Skill",
+            "选择要运行的 Skill：",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        skill = skills[labels.index(choice)]
+        args = self._build_local_skill_args(skill)
+        if args is None:
+            return
+
+        self.append_skill_log(f"手动运行本地 Skill：{skill.name}")
+        try:
+            result = run_local_skill(skill, args)
+        except Exception as exc:
+            self.append_skill_log(f"Skill 执行失败：{skill.name} | {exc}")
+            QMessageBox.warning(self, "Skill 执行失败", str(exc))
+            return
+
+        self.show_text_dialog(f"Skill 结果：{skill.name}", result)
+
+    def _build_local_skill_args(self, skill: Any) -> dict[str, Any] | None:
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+        required = set(parameters.get("required") or [])
+
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+        current_text = self.editor.toPlainText().strip()
+        setting = self.setting_edit.toPlainText().strip()
+        source_text = selected_text or current_text or setting
+        memory_context = self.agent._build_memory_context(setting, self.current_outline, self.chapters)
+
+        args: dict[str, Any] = {}
+        for name in properties:
+            lowered = name.lower()
+            if lowered in {"text", "selected_text", "chapter_text", "content"}:
+                args[name] = source_text
+            elif lowered in {"current_text", "current_chapter"}:
+                args[name] = current_text or source_text
+            elif lowered in {"previous_context", "context", "memory_context"}:
+                args[name] = memory_context
+            elif lowered in {"query", "topic", "instruction"}:
+                args[name] = selected_text or setting or current_text[:200]
+            elif lowered in {"novel_setting", "setting"}:
+                args[name] = setting
+            elif lowered == "style":
+                args[name] = self.style_combo.currentText()
+            elif name in required:
+                value, ok = QInputDialog.getText(self, "Skill 参数", f"请输入参数 {name}：")
+                if not ok:
+                    return None
+                args[name] = value
+
+        return args
+
     def run_local_knowledge_search(self) -> None:
         default = self.editor.textCursor().selectedText().replace("\u2029", "\n").strip()
         query, ok = QInputDialog.getText(self, "检索本地设定", "输入关键词：", text=default or "主角能力")
@@ -732,6 +961,188 @@ class NovelAIAgentWindow(QMainWindow):
         except Exception as exc:
             self.append_skill_log(f"索引重建失败：{exc}")
             QMessageBox.warning(self, "重建失败", str(exc))
+
+    def show_architecture_status(self) -> None:
+        kb = get_knowledge_base()
+        stats = kb.get_stats()
+        lines = [
+            "当前架构能力状态",
+            "",
+            "已接入：",
+            "- Prompt 工程：已拆分到 prompt_templates.py",
+            "- RAG / 向量检索：已接入 knowledge_base.py",
+            "- LangChain：已提供 langchain_integration.py 适配层",
+            "- LangGraph：已提供 langgraph_workflow.py 本地审稿流程",
+            "- FastAPI：已提供 api_server.py HTTP 服务",
+            "- Docker：已提供 Dockerfile 和 .dockerignore",
+            "- 微调数据：已提供 finetune_exporter.py JSONL 导出器",
+            "",
+            "依赖状态：",
+            f"- langchain_core: {self._dependency_label('langchain_core')}",
+            f"- langgraph: {self._dependency_label('langgraph')}",
+            f"- fastapi: {self._dependency_label('fastapi')}",
+            f"- uvicorn: {self._dependency_label('uvicorn')}",
+            "",
+            "知识库状态：",
+            f"- 文本块数：{stats['total_chunks']}",
+            f"- Embedding 模型：{stats['model']}",
+            f"- 语义检索依赖：{'可用' if stats['st_available'] else '未安装 sentence-transformers'}",
+            f"- 向量存储目录：{stats['persist_dir']}",
+        ]
+        self.append_skill_log("已查看架构能力状态。")
+        self.show_text_dialog("架构增强状态", "\n".join(lines))
+
+    def preview_prompt_templates(self) -> None:
+        payload = self._base_payload()
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+        selected_text = selected_text or payload["current_text"] or "这里会放入当前选中的文本或编辑区全文。"
+
+        outline = outline_prompt(
+            novel_setting=payload["novel_setting"],
+            style=payload["style"],
+            auto_context="【自动上下文会在实际生成时注入到这里】",
+        )
+        memory_context = self.agent._build_memory_context(
+            payload["novel_setting"],
+            payload["outline"],
+            payload["chapters"],
+        )
+        chapter = chapter_prompt(
+            chapter_index=len(self.chapters) + 1,
+            style=payload["style"],
+            max_words=self.word_slider.value(),
+            memory_context=memory_context,
+            auto_context="【自动上下文会在实际生成时注入到这里】",
+        )
+        polish = polish_prompt(
+            selected_text=selected_text,
+            style=payload["style"],
+            instruction="增强画面感、节奏和情绪张力",
+            auto_context="【自动上下文会在实际生成时注入到这里】",
+        )
+
+        text = "\n\n".join(
+            [
+                "【System Prompt】",
+                outline.system,
+                "【生成大纲 Prompt】",
+                outline.user,
+                "【生成下一章 Prompt】",
+                chapter.user,
+                "【润色 Prompt】",
+                polish.user,
+            ]
+        )
+        self.append_skill_log("已预览 Prompt 模板。")
+        self.show_text_dialog("Prompt 模板预览", text)
+
+    def show_langchain_status(self) -> None:
+        lines = [
+            describe_langchain_integration(),
+            "",
+            "依赖状态：",
+            f"- langchain_core: {self._dependency_label('langchain_core')}",
+            f"- langchain: {self._dependency_label('langchain')}",
+            f"- langchain_community: {self._dependency_label('langchain_community')}",
+            f"- langchain_openai: {self._dependency_label('langchain_openai')}",
+            "",
+            "使用方式：",
+            "安装依赖后，可在代码中调用 build_prompt_templates() 获取 ChatPromptTemplate，",
+            "调用 build_langchain_tools() 获取可交给 LangChain Agent 的本地工具列表。",
+        ]
+        self.append_skill_log("已查看 LangChain 适配状态。")
+        self.show_text_dialog("LangChain 适配状态", "\n".join(lines))
+
+    def run_langgraph_review(self) -> None:
+        current_text = self.editor.toPlainText().strip()
+        setting = self.setting_edit.toPlainText().strip()
+        if not current_text and not setting:
+            QMessageBox.information(self, "缺少内容", "请先在小说设定或正文编辑区输入内容。")
+            return
+
+        self.append_skill_log("手动触发【LangGraph 审稿流程】。")
+        try:
+            result = run_review_graph(
+                query=setting[:200] or current_text[:200],
+                novel_setting=setting,
+                current_text=current_text,
+            )
+        except Exception as exc:
+            self.append_skill_log(f"LangGraph 审稿流程不可用：{exc}")
+            QMessageBox.warning(self, "LangGraph 不可用", str(exc))
+            return
+
+        lines = [
+            "LangGraph 审稿流程结果",
+            "",
+            "【检索上下文】",
+            result.get("knowledge_context", ""),
+            "",
+            "【本地审稿报告】",
+            result.get("audit_report", ""),
+        ]
+        self.show_text_dialog("LangGraph 审稿", "\n".join(lines))
+
+    def export_finetune_dataset_from_dialog(self) -> None:
+        default_path = str(DEFAULT_OUTPUT_FILE)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出微调数据集",
+            default_path,
+            "JSONL 文件 (*.jsonl);;所有文件 (*)",
+        )
+        if not path:
+            return
+
+        try:
+            output_path, count = export_openai_chat_jsonl(output_path=Path(path))
+        except Exception as exc:
+            self.append_skill_log(f"微调数据导出失败：{exc}")
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+
+        msg = (
+            f"已导出 {count} 条微调样本。\n\n"
+            f"输出文件：{output_path}\n\n"
+            "格式：OpenAI chat fine-tuning JSONL，每行包含 system/user/assistant messages。"
+        )
+        self.append_skill_log(f"已导出微调数据集：{output_path}（{count} 条）")
+        self.show_text_dialog("微调数据导出完成", msg)
+
+    def show_api_docker_guide(self) -> None:
+        lines = [
+            "FastAPI 本地启动",
+            "",
+            "1. 安装服务依赖：",
+            r".venv\Scripts\python.exe -m pip install -r requirements-api.txt",
+            "",
+            "2. 启动 API 服务：",
+            r".venv\Scripts\uvicorn.exe api_server:app --reload --host 127.0.0.1 --port 8000",
+            "",
+            "3. 打开接口文档：",
+            "http://127.0.0.1:8000/docs",
+            "",
+            "Docker 启动",
+            "",
+            "docker build -t novel-ai-agent-api .",
+            "docker run --rm -p 8000:8000 novel-ai-agent-api",
+            "",
+            "已暴露的主要接口：",
+            "- GET /health",
+            "- POST /generate-outline",
+            "- POST /generate-chapter",
+            "- POST /polish",
+            "- POST /search-knowledge",
+            "- POST /audit-text",
+            "- POST /rebuild-knowledge-index",
+            "- POST /generate-image",
+            "- POST /export-finetune-dataset",
+        ]
+        self.append_skill_log("已查看 API / Docker 启动说明。")
+        self.show_text_dialog("API / Docker 启动说明", "\n".join(lines))
+
+    def _dependency_label(self, module_name: str) -> str:
+        return "已安装" if importlib.util.find_spec(module_name) else "未安装"
 
     def show_text_dialog(self, title: str, text: str) -> None:
         dialog = QDialog(self)

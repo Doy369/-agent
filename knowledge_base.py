@@ -40,8 +40,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
 from local_tools import (
     _read_knowledge_sources,
     _split_sections,
@@ -68,6 +66,14 @@ try:
 except ImportError:
     _ST_AVAILABLE = False
     SentenceTransformer = None
+
+try:
+    import numpy as np
+
+    _NP_AVAILABLE = True
+except ImportError:
+    _NP_AVAILABLE = False
+    np = None
 
 
 # ===========================================================================
@@ -112,7 +118,7 @@ class EmbeddingKnowledgeBase:
 
     @property
     def st_available(self) -> bool:
-        return _ST_AVAILABLE
+        return _ST_AVAILABLE and _NP_AVAILABLE
 
     # ------------------------------------------------------------------
     # 模型加载
@@ -124,10 +130,10 @@ class EmbeddingKnowledgeBase:
         首次调用从 HuggingFace 下载（~100MB），之后缓存到本地。
         国内慢可设：set HF_ENDPOINT=https://hf-mirror.com
         """
-        if not _ST_AVAILABLE:
+        if not _ST_AVAILABLE or not _NP_AVAILABLE:
             raise RuntimeError(
-                "语义搜索功能需要安装 sentence-transformers 库。\n"
-                "请在终端运行：pip install sentence-transformers"
+                "语义搜索功能需要安装 sentence-transformers 和 numpy。\n"
+                "请在终端运行：pip install -r requirements.txt"
             )
         if self._model is None:
             self._model = SentenceTransformer(EMBEDDING_MODEL_NAME)
@@ -154,6 +160,8 @@ class EmbeddingKnowledgeBase:
         """
         if self._embeddings is None:
             return
+        if not _NP_AVAILABLE:
+            raise RuntimeError("保存向量索引需要 numpy。请先运行：pip install -r requirements.txt")
 
         np.savez_compressed(
             self._index_path,
@@ -179,6 +187,8 @@ class EmbeddingKnowledgeBase:
             True 如果成功加载，False 如果文件不存在或损坏。
         """
         if not self._index_path.exists() or not self._meta_path.exists():
+            return False
+        if not _NP_AVAILABLE:
             return False
 
         try:
@@ -276,10 +286,10 @@ class EmbeddingKnowledgeBase:
         Returns:
             格式化的搜索报告文本，可直接拼入 LLM 上下文。
         """
-        if not _ST_AVAILABLE:
+        if not _ST_AVAILABLE or not _NP_AVAILABLE:
             return (
-                "[语义搜索不可用] 需要安装 sentence-transformers 库。\n"
-                "请在终端运行：pip install sentence-transformers"
+                "[语义搜索不可用] 需要安装 sentence-transformers 和 numpy。\n"
+                "请在终端运行：pip install -r requirements.txt"
             )
 
         if self._embeddings is None or len(self._documents) == 0:
@@ -332,7 +342,7 @@ class EmbeddingKnowledgeBase:
             "model": EMBEDDING_MODEL_NAME,
             "persist_dir": str(self._persist_dir),
             "metadata": {"source_hash": self._source_hash},
-            "st_available": _ST_AVAILABLE,
+            "st_available": _ST_AVAILABLE and _NP_AVAILABLE,
         }
 
     def check_and_refresh(self) -> int:

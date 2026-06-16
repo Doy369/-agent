@@ -227,6 +227,15 @@ def ensure_app_dirs() -> None:
         else:
             KNOWLEDGE_FILE.write_text(DEFAULT_KNOWLEDGE, encoding="utf-8")
 
+    bundled_skill_dir = get_resource_path("local_skills")
+    if bundled_skill_dir.is_dir() and bundled_skill_dir.resolve() != SKILL_DIR.resolve():
+        for path in sorted(bundled_skill_dir.glob("*")):
+            if path.suffix.lower() not in {".py", ".json", ".md"} or path.name.startswith("_"):
+                continue
+            destination = SKILL_DIR / path.name
+            if not destination.exists():
+                shutil.copy2(path, destination)
+
 
 def safe_filename(name: str, fallback: str = "未命名章节") -> str:
     """将章节标题转换为 Windows 可用文件名。"""

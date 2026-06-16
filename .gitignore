@@ -20,6 +20,9 @@ Thumbs.db
 # PyInstaller
 *.spec.bak
 
+# Generated training/export artifacts
+finetune_datasets/
+
 # 打包产物（exe 体积大，不纳入版本控制）
 dist/NovelAIAgent.exe
 
